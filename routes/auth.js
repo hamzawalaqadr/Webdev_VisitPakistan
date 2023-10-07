@@ -1,72 +1,68 @@
-const express = require('express');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const User = require('../models/User');
+const express = require('express')
+const router = express.Router()
+const createError = require('http-errors')
+const User = require('../models/User')
+const {authSchema, loginSchema} = require('../middleware/validationSchema')
+const {signAccessToken, signRefreshToken, verifyRefreshToken} = require('../middleware/jwtHelper')
 
-const router = express.Router();
+router.post('/register', async (req, res, next) => {
+    //res.send("Register route")
+    try {
+        const result = await authSchema.validateAsync(req.body)
+        const doesExist = await User.findOne({email: result.email})
+        if(doesExist) throw createError.Conflict(`${result.email} is already registered`)
 
-const generateTokens = (user) => {
-  const payload = {
-    id: user._id,
-    username: user.username,
-    email: user.email,
-    contactNumber: user.contactNumber
-  };
+        const user = new User(result)
+        const savedUser = await user.save()
+        const accessToken = await signAccessToken(savedUser.id)
+        const refreshToken = await signRefreshToken(savedUser.id)
+        res.send({accessToken, refreshToken})
+    } catch (error) {
+        if (error.isJoi === true) error.status = 422
+        next(error)
+    }
+})
 
-  const accessToken = jwt.sign(payload, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '15m' });
-  const refreshToken = jwt.sign(payload, process.env.REFRESH_TOKEN_SECRET, { expiresIn: '2h' });
+router.post('/login', async (req, res, next) => {
+    //res.send("Login route")
+    try {
+        const result = await loginSchema.validateAsync(req.body)
+        const user = await User.findOne({email: result.email})
+        if(!user) throw createError.NotFound("User not registered")
+        
+        const isMatchPassword = await user.isValidPassword(result.password)
+        //const isMatchEmail = await user.isValidEmail(result.email)
+        if(!isMatchPassword) throw createError.Unauthorized('Username/Password not valid.')
 
-  return { accessToken, refreshToken };
-};
+        const accessToken = await signAccessToken(user.id)
+        const refreshToken = await signRefreshToken(user.id)
 
-router.post('/register', async (req, res) => {
-  const { username, password, email, contactNumber } = req.body;
+        res.send({accessToken, refreshToken})
 
-  // Check if username or email already exists
-  const existingUserByUsername = await User.findOne({ username });
-  const existingUserByEmail = await User.findOne({ email });
 
-  if (existingUserByUsername) {
-    return res.status(400).json({ message: 'Username already exists' });
-  }
+        res.send(result)
+    } catch (error) {
+        if (error.isJoi === true) return next(createError.BadRequest("Invalid Username/Password"))
+        next(error)
+    }
+})
 
-  if (existingUserByEmail) {
-    return res.status(400).json({ message: 'Email already exists' });
-  }
+router.post('/refresh-token', async (req, res, next) => {
+    try {
+        const {refreshToken} = req.body
+        if(!refreshToken) throw createError.BadRequest()
+        const userId = await verifyRefreshToken(refreshToken)
 
-  const user = new User({ username, password, email, contactNumber });
-  await user.save();
-  res.json({ message: 'Registration successful' });
-});
+        const accessToken = await signAccessToken(userId)
+        const refToken = await signRefreshToken(userId)
+        res.send({accessToken: accessToken, refreshToken: refToken})
+    } catch (error) {
+        next(error)
+    }
+})
 
-router.post('/login', async (req, res) => {
-  const { username, password } = req.body;
-  const user = await User.findOne({ username, isDeleted: false });
-  if (!user) return res.status(400).send('Invalid username');
 
-  const isMatch = await bcrypt.compare(password, user.password);
-  if (!isMatch) return res.status(400).send('Invalid password');
 
-  const { accessToken, refreshToken } = generateTokens(user);
 
-  res.json({ message: 'Login successful', accessToken, refreshToken });
-});
 
-// Refresh Token Route
-router.post('/refresh', async (req, res) => {
-  const { refreshToken } = req.body;
-  if (!refreshToken) return res.status(400).json({ message: 'Refresh token is required' });
-
-  try {
-    const payload = jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET);
-    const user = await User.findById(payload.id).select('-password');
-    if (!user || user.isDeleted) return res.status(404).json({ message: 'User not found or deleted' });
-
-    const { accessToken } = generateTokens(user);
-    res.json({ message: 'Access token refreshed', accessToken });
-  } catch (err) {
-    res.status(401).json({ message: 'Invalid refresh token' });
-  }
-});
-
-module.exports = router;
+module.exports = router

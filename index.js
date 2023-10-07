@@ -1,26 +1,52 @@
-const express = require('express');
-const morgan = require('morgan');
-const connectDB = require('./config/db');
+const express = require('express')
+const mongoose = require('mongoose')
+const createError = require('http-errors')
+require('dotenv').config()
 
-require('dotenv').config();
+const {verifyAccessToken} = require('./middleware/jwtHelper')
 
-const app = express();
+const url = 'mongodb+srv://hamzawq:PXUsHSIruVbztWtQ@cluster0.zvk1ffv.mongodb.net/?retryWrites=true&w=majority'
+const app = express()
 
-// Use Morgan Middleware for Logging
-app.use(morgan('dev'));
+mongoose.connect(url, {useNewUrlParser: true, useUnifiedTopology: true, ssl: true,
+  tlsAllowInvalidCertificates: true,})
+const conn = mongoose.connection
+const PORT = process.env.PORT || 9000
 
-connectDB();
+conn.on('open', () => {
+    console.log('connected successfully.')
+})
 
-app.use(express.json());
+app.use(express.json())
 
-// Route for the root URL
-app.get('/', (req, res) => {
-    res.json( "Welcome to the User Auth TEST :)" );
-  });
+app.get('/', verifyAccessToken, async (req, res, next) => {
+    
+    res.send('Hello from express.')
+})
 
-app.use('/api/auth', require('./routes/auth'));
-app.use('/api/users', require('./routes/userRoutes'));
+app.use((err, req, res, next) => {
+    res.status(err.status || 500)
+    res.send({
+        error: {
+            status: err.status || 500,
+            message: err.message,
+        },
+    })
+})
 
-const PORT = process.env.PORT || 5000;
+const userRouter = require('./routes/userRoutes')
+app.use('/users', userRouter)
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+const authRouter = require('./routes/auth')
+app.use('/auth', authRouter)
+
+const restuarantRouter = require('./routes/restuarantRoutes')
+app.use('/restuarants', restuarantRouter)
+
+const itemRouter = require('./routes/itemRoutes')
+app.use('/items', itemRouter)
+
+
+app.listen(PORT, () => {
+    console.log('Server started')
+})
